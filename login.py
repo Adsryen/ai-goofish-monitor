@@ -1,13 +1,22 @@
 import asyncio
+import platform
 from playwright.async_api import async_playwright
+from typing import Dict, Any
 
 # 定义保存登录状态的文件路径
 STATE_FILE = "xianyu_state.json"
 
 async def main():
     async with async_playwright() as p:
+        # 自动识别操作系统并设置正确的 Chrome 路径
+        launch_options: Dict[str, Any] = {"headless": False}
+        if platform.system() == "Windows":
+            launch_options["executable_path"] = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        elif platform.system() == "Linux":
+            launch_options["executable_path"] = "/usr/bin/google-chrome-stable"
+
         # 启动一个非无头浏览器，这样你才能看到界面并操作
-        browser = await p.chromium.launch(headless=False)
+        browser = await p.chromium.launch(**launch_options)
         context = await browser.new_context()
         page = await context.new_page()
 

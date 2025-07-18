@@ -201,23 +201,60 @@ h2 {
 }
 
 .tasks-table th, .tasks-table td {
-    padding: 12px 16px;
+    padding: 12px 15px;
+    border-bottom: 1px solid #3c3c3c;
     text-align: left;
-    border-bottom: 1px solid #f0f0f0;
     vertical-align: middle;
 }
 
 .tasks-table th {
-    background-color: #fafafa;
-    font-weight: 600;
-    color: #555;
+    background-color: #3a3a3a;
+    font-weight: bold;
+    color: #e0e0e0;
 }
 
-.tasks-table tbody tr:hover {
-    background-color: #f5faff;
+.tasks-table tr:last-child td {
+    border-bottom: none;
 }
 
-.tag {
+.tasks-table tr:hover {
+    background-color: #383838;
+}
+
+.description-container {
+    max-width: 300px;
+    white-space: normal;
+}
+
+.description-full {
+    background-color: #2a2a2a;
+    padding: 10px;
+    border-radius: 4px;
+    margin-top: 5px;
+    white-space: pre-wrap; /* Ensures whitespace is preserved and lines wrap */
+}
+
+.toggle-description-btn {
+    background: none;
+    border: none;
+    color: #4a90e2;
+    cursor: pointer;
+    padding: 0;
+    margin-top: 5px;
+    font-size: 12px;
+}
+
+.toggle-description-btn:hover {
+    text-decoration: underline;
+}
+
+.task-actions .control-button-small {
+    padding: 5px 10px;
+    font-size: 12px;
+    margin-right: 5px;
+}
+
+.tasks-table .tag {
     background-color: #e6f7ff;
     border: 1px solid #91d5ff;
     color: #096dd9;

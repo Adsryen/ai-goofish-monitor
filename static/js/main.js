@@ -314,43 +314,56 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function renderTasksTable(tasks) {
-        if (!tasks || tasks.length === 0) {
-            return '<p>没有找到任何任务。请点击右上角“创建新任务”来添加一个。</p>';
+        if (!tasks) {
+            return '<p>无法加载任务列表或任务列表为空。</p>';
         }
 
-        const tableHeader = `
-            <thead>
-                <tr>
-                    <th>启用</th>
-                    <th>任务名称</th>
-                    <th>关键词</th>
-                    <th>价格范围</th>
-                    <th>筛选条件</th>
-                    <th>AI 标准</th>
-                    <th>操作</th>
-                </tr>
-            </thead>`;
+        const tasksArray = Object.values(tasks);
+        if (tasksArray.length === 0) {
+            return '<p>当前没有监控任务。点击右上角 "创建新任务" 来添加一个吧！</p>';
+        }
 
-        const tableBody = tasks.map(task => `
-            <tr data-task-id="${task.id}" data-task='${JSON.stringify(task)}'>
+        const tableRows = tasksArray.map(task => `
+            <tr data-task-id="${task.id}">
+                <td>${task.name}</td>
+                <td>${task.keyword}</td>
+                <td>${task.price_range || '不限'}</td>
                 <td>
-                    <label class="switch">
-                        <input type="checkbox" ${task.enabled ? 'checked' : ''}>
-                        <span class="slider round"></span>
-                    </label>
+                    <div class="description-container">
+                        <p class="description-short">${task.description.substring(0, 50)}...</p>
+                        <div class="description-full" style="display: none;">${task.description}</div>
+                        <button class="toggle-description-btn">查看详情</button>
+                    </div>
                 </td>
-                <td>${task.task_name}</td>
-                <td><span class="tag">${task.keyword}</span></td>
-                <td>${task.min_price || '不限'} - ${task.max_price || '不限'}</td>
-                <td>${task.personal_only ? '<span class="tag personal">个人闲置</span>' : ''}</td>
-                <td>${(task.ai_prompt_criteria_file || 'N/A').replace('prompts/', '')}</td>
                 <td>
-                    <button class="action-btn edit-btn">编辑</button>
-                    <button class="action-btn delete-btn">删除</button>
+                    <span class="tag ${task.enabled ? 'status-running' : 'status-stopped'}">${task.enabled ? '运行中' : '已停止'}</span>
                 </td>
-            </tr>`).join('');
+                <td>
+                    <div class="task-actions">
+                        <button class="control-button-small toggle-task-btn">${task.enabled ? '停止' : '启动'}</button>
+                        <button class="control-button-small delete-task-btn">删除</button>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
 
-        return `<table class="tasks-table">${tableHeader}<tbody>${tableBody}</tbody></table>`;
+        return `
+            <table class="tasks-table">
+                <thead>
+                    <tr>
+                        <th>任务名称</th>
+                        <th>关键词</th>
+                        <th>价格范围</th>
+                        <th>详细购买需求</th>
+                        <th>状态</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${tableRows}
+                </tbody>
+            </table>
+        `;
     }
 
 
@@ -378,6 +391,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const container = document.getElementById('tasks-table-container');
                 const tasks = await fetchTasks();
                 container.innerHTML = renderTasksTable(tasks);
+                attachTaskActionListeners(); // Attach listeners for actions like delete/toggle
             } else if (sectionId === 'results') {
                 await initializeResultsView();
             } else if (sectionId === 'logs') {
@@ -784,5 +798,46 @@ document.addEventListener('DOMContentLoaded', function() {
                 closeModal();
             }
         });
+    }
+
+    function attachTaskActionListeners() {
+        const tasksTable = document.querySelector('.tasks-table');
+        if (!tasksTable) return;
+
+        tasksTable.addEventListener('click', async (event) => {
+            const target = event.target;
+            const row = target.closest('tr');
+            if (!row) return;
+
+            const taskId = row.dataset.taskId;
+
+            if (target.classList.contains('toggle-description-btn')) {
+                const shortDesc = row.querySelector('.description-short');
+                const fullDesc = row.querySelector('.description-full');
+                const isHidden = fullDesc.style.display === 'none';
+                
+                fullDesc.style.display = isHidden ? 'block' : 'none';
+                shortDesc.style.display = isHidden ? 'none' : 'block';
+                target.textContent = isHidden ? '收起' : '查看详情';
+            } else if (target.classList.contains('toggle-task-btn')) {
+                const task = await fetchTaskById(taskId); // You might need to implement this or fetch all tasks again
+                if (task) {
+                    await updateTask(taskId, { enabled: !task.enabled });
+                    navigateTo('#tasks'); // Refresh view
+                }
+            } else if (target.classList.contains('delete-task-btn')) {
+                if (confirm('你确定要删除这个任务吗？')) {
+                    await deleteTask(taskId);
+                    navigateTo('#tasks'); // Refresh view
+                }
+            }
+        });
+    }
+
+    async function fetchTaskById(taskId) {
+        // This is a helper function, assuming you might have a way to get a single task
+        // If not, you could find it from the result of fetchTasks()
+        const tasks = await fetchTasks();
+        return tasks ? tasks[taskId] : null;
     }
 });

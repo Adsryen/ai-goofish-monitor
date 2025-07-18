@@ -56,12 +56,76 @@ app = FastAPI(title="闲鱼智能监控机器人")
 
 # --- Globals for process management ---
 scraper_process = None
+g_monitoring_active = False  # 新增：监控是否激活的状态
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Setup templates
 templates = Jinja2Templates(directory="templates")
+
+# --- Background Task for Process Monitoring ---
+
+async def _start_scraper_process():
+    """
+    内部函数，用于启动爬虫子进程。
+    """
+    global scraper_process
+    # 设置日志目录和文件
+    os.makedirs("logs", exist_ok=True)
+    log_file_path = os.path.join("logs", "scraper.log")
+    
+    # 以追加模式打开日志文件
+    log_file_handle = open(log_file_path, 'a', encoding='utf-8')
+
+    # 设置环境变量
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    # 启动进程
+    scraper_process = await asyncio.create_subprocess_exec(
+        sys.executable, "-u", "spider_v2.py",
+        stdout=log_file_handle,
+        stderr=log_file_handle,
+        env=env
+    )
+    print(f"启动爬虫进程，PID: {scraper_process.pid}，日志输出到 {log_file_path}")
+
+
+async def monitor_and_restart_scraper():
+    """
+    一个后台任务，在 g_monitoring_active 为 True 时，持续监控爬虫进程，
+    如果进程意外终止，则自动重启。
+    """
+    global scraper_process, g_monitoring_active
+    while True:
+        await asyncio.sleep(15)  # 每 15 秒检查一次
+
+        if not g_monitoring_active:
+            continue
+
+        # 如果监控是激活状态，但进程不存在或已终止，就重启
+        if scraper_process is None or scraper_process.returncode is not None:
+            if scraper_process and scraper_process.returncode is not None:
+                print(f"检测到爬虫进程 {scraper_process.pid} 已意外终止，返回码: {scraper_process.returncode}。准备重启...")
+            else:
+                print("监控任务处于活动状态，但没有爬虫进程在运行，将启动一个新进程。")
+
+            try:
+                await _start_scraper_process()
+                print("爬虫进程已成功重启。")
+            except Exception as e:
+                print(f"自动重启爬虫进程失败: {e}")
+                # 失败后可以等待更长时间再重试，避免快速失败循环
+                await asyncio.sleep(60)
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    应用启动时，启动后台监控任务。
+    """
+    asyncio.create_task(monitor_and_restart_scraper())
+
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -222,49 +286,47 @@ async def update_task(task_id: int, task_update: TaskUpdate):
 @app.post("/api/tasks/start-all", response_model=dict)
 async def start_all_tasks():
     """
-    启动所有在 config.json 中启用的任务。
+    启动所有在 config.json 中启用的任务，并激活自动重启监控。
     """
-    global scraper_process
-    if scraper_process and scraper_process.returncode is None:
+    global scraper_process, g_monitoring_active
+    if g_monitoring_active and scraper_process and scraper_process.returncode is None:
         raise HTTPException(status_code=400, detail="监控任务已在运行中。")
 
-    try:
-        # 设置日志目录和文件
-        os.makedirs("logs", exist_ok=True)
-        log_file_path = os.path.join("logs", "scraper.log")
-        
-        # 以追加模式打开日志文件，如果不存在则创建。
-        # 子进程将继承这个文件句柄。
-        log_file_handle = open(log_file_path, 'a', encoding='utf-8')
+    g_monitoring_active = True
+    print("自动重启监控已激活。")
 
-        # 使用与Web服务器相同的Python解释器来运行爬虫脚本
-        # 增加 -u 参数来禁用I/O缓冲，确保日志实时写入文件
-        scraper_process = await asyncio.create_subprocess_exec(
-            sys.executable, "-u", "spider_v2.py",
-            stdout=log_file_handle,
-            stderr=log_file_handle
-        )
-        print(f"启动爬虫进程，PID: {scraper_process.pid}，日志输出到 {log_file_path}")
-        return {"message": "所有启用任务已启动。"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"启动爬虫进程时出错: {e}")
+    if scraper_process is None or scraper_process.returncode is not None:
+        try:
+            await _start_scraper_process()
+            return {"message": "所有启用任务已启动，自动重启已激活。"}
+        except Exception as e:
+            g_monitoring_active = False  # 启动失败，取消激活
+            print(f"启动爬虫进程时出错: {e}")
+            raise HTTPException(status_code=500, detail=f"启动爬虫进程时出错: {e}")
+    else:
+        # 进程已在运行，但之前可能未开启监控
+        return {"message": "任务已在运行中，现已激活自动重启。"}
 
 
 @app.post("/api/tasks/stop-all", response_model=dict)
 async def stop_all_tasks():
     """
-    停止当前正在运行的监控任务。
+    停止当前正在运行的监控任务，并关闭自动重启。
     """
-    global scraper_process
+    global scraper_process, g_monitoring_active
+    
+    g_monitoring_active = False
+    print("自动重启监控已关闭。")
+
     if not scraper_process or scraper_process.returncode is not None:
-        raise HTTPException(status_code=400, detail="没有正在运行的监控任务。")
+        return JSONResponse(content={"message": "没有正在运行的监控任务。"}, status_code=200)
 
     try:
         scraper_process.terminate()
         await scraper_process.wait()
         print(f"爬虫进程 {scraper_process.pid} 已终止。")
         scraper_process = None
-        return {"message": "所有任务已停止。"}
+        return {"message": "所有任务已停止，自动重启已关闭。"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"停止爬虫进程时出错: {e}")
 
@@ -278,7 +340,7 @@ async def get_logs():
     if not os.path.exists(log_file_path):
         return JSONResponse(content={"content": "日志文件不存在或尚未创建。"}, status_code=200)
     try:
-        async with aiofiles.open(log_file_path, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = await f.read()
         return {"content": content}
     except Exception as e:
@@ -366,7 +428,7 @@ async def get_system_status():
     """
     检查系统关键文件和配置的状态。
     """
-    global scraper_process
+    global scraper_process, g_monitoring_active
     env_config = dotenv_values(".env")
 
     # 检查进程是否仍在运行
@@ -381,6 +443,7 @@ async def get_system_status():
     
     status = {
         "scraper_running": is_running,
+        "monitoring_active": g_monitoring_active,
         "login_state_file": {
             "exists": os.path.exists("xianyu_state.json"),
             "path": "xianyu_state.json"
@@ -450,7 +513,8 @@ async def shutdown_event():
     """
     应用退出时，确保终止所有子进程。
     """
-    global scraper_process
+    global scraper_process, g_monitoring_active
+    g_monitoring_active = False  # 停止监控
     if scraper_process and scraper_process.returncode is None:
         print(f"Web服务器正在关闭，正在终止爬虫进程 {scraper_process.pid}...")
         scraper_process.terminate()

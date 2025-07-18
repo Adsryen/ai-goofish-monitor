@@ -12,7 +12,7 @@
   },
   {
     "task_name": "DJI Mini 3 Pro",
-    "enabled": true,
+    "enabled": false,
     "keyword": "mini 3 pro",
     "max_pages": 3,
     "personal_only": true,
@@ -22,14 +22,25 @@
     "max_price": "4500"
   },
   {
-    "task_name": "婴儿车",
+    "task_name": "硬盘",
     "enabled": true,
-    "keyword": "babycare 婴儿车",
+    "keyword": "固态硬盘",
     "max_pages": 3,
     "personal_only": true,
-    "min_price": "500",
-    "max_price": "1000",
+    "min_price": "50",
+    "max_price": "150",
     "ai_prompt_base_file": "prompts/base_prompt.txt",
-    "ai_prompt_criteria_file": "prompts/babycare_婴儿车_criteria.txt"
+    "ai_prompt_criteria_file": "prompts/固态硬盘_criteria.txt"
+  },
+  {
+    "task_name": "赛睿耳机",
+    "enabled": false,
+    "keyword": "赛睿耳机",
+    "max_pages": 3,
+    "personal_only": true,
+    "min_price": "100",
+    "max_price": "500",
+    "ai_prompt_base_file": "prompts/base_prompt.txt",
+    "ai_prompt_criteria_file": "prompts/赛睿耳机_criteria.txt"
   }
 ]
