@@ -37,6 +37,7 @@ class TaskUpdate(BaseModel):
     max_price: Optional[str] = None
     ai_prompt_base_file: Optional[str] = None
     ai_prompt_criteria_file: Optional[str] = None
+    description: Optional[str] = None # AI-gen a new criteria file
 
 
 class TaskGenerateRequest(BaseModel):
@@ -159,6 +160,26 @@ async def get_tasks():
         raise HTTPException(status_code=500, detail=f"读取任务配置时发生错误: {e}")
 
 
+@app.get("/api/tasks/{task_id}", response_model=dict)
+async def get_task(task_id: int):
+    """
+    获取指定ID的任务详情。
+    """
+    try:
+        async with aiofiles.open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            tasks = json.loads(await f.read())
+    except (FileNotFoundError, json.JSONDecodeError):
+        raise HTTPException(status_code=500, detail="读取或解析配置文件失败。")
+
+    if not (0 <= task_id < len(tasks)):
+        raise HTTPException(status_code=404, detail="任务未找到。")
+    
+    task_data = tasks[task_id]
+    task_data['id'] = task_id
+    
+    return {"task": task_data}
+
+
 @app.post("/api/tasks/generate", response_model=dict)
 async def generate_task(req: TaskGenerateRequest):
     """
@@ -195,6 +216,7 @@ async def generate_task(req: TaskGenerateRequest):
         "task_name": req.task_name,
         "enabled": True,
         "keyword": req.keyword,
+        "description": req.description,
         "max_pages": 3, # 默认值
         "personal_only": req.personal_only,
         "min_price": req.min_price,
@@ -248,6 +270,7 @@ async def create_task(task: Task):
 async def update_task(task_id: int, task_update: TaskUpdate):
     """
     更新指定ID任务的属性。
+    如果 description 提供了，则会触发 AI 重新生成 criteria 文件。
     """
     try:
         async with aiofiles.open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -258,18 +281,39 @@ async def update_task(task_id: int, task_update: TaskUpdate):
     if not (0 <= task_id < len(tasks)):
         raise HTTPException(status_code=404, detail="任务未找到。")
 
-    # 更新数据
-    task_changed = False
+    original_task = tasks[task_id].copy()
     update_data = task_update.dict(exclude_unset=True)
     
-    if update_data:
-        original_task = tasks[task_id].copy()
-        tasks[task_id].update(update_data)
-        if tasks[task_id] != original_task:
-            task_changed = True
+    # 检查 description 是否有变化，如果有，则需要重新生成AI分析标准
+    if 'description' in update_data and update_data['description'] != original_task.get('description'):
+        print(f"任务 '{original_task['task_name']}' 的需求描述发生变化，准备重新生成AI分析标准。")
+        
+        criteria_filepath = original_task.get("ai_prompt_criteria_file")
+        if not criteria_filepath:
+            raise HTTPException(status_code=400, detail="任务缺少 'ai_prompt_criteria_file' 配置，无法重新生成标准。")
 
-    if not task_changed:
-        return JSONResponse(content={"message": "数据无变化，未执行更新。"}, status_code=200)
+        try:
+            # 调用AI生成新的标准
+            new_criteria = await generate_criteria(
+                user_description=update_data['description'],
+                reference_file_path="prompts/macbook_criteria.txt" # 保持与创建时一致
+            )
+            if not new_criteria:
+                raise HTTPException(status_code=500, detail="AI未能生成新的分析标准。")
+            
+            # 异步写入新标准到文件
+            async with aiofiles.open(criteria_filepath, 'w', encoding='utf-8') as f:
+                await f.write(new_criteria)
+            
+            print(f"已成功更新AI分析标准文件: {criteria_filepath}")
+
+        except Exception as e:
+            # 这里的异常需要更详细地向客户端报告
+            print(f"生成或保存新AI标准时出错: {e}")
+            raise HTTPException(status_code=500, detail=f"生成或保存新AI标准时出错: {str(e)}")
+
+    # 更新任务的其他属性
+    tasks[task_id].update(update_data)
 
     # 异步写回文件
     try:

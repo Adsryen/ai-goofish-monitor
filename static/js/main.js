@@ -325,23 +325,26 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const tableRows = tasksArray.map(task => `
             <tr data-task-id="${task.id}">
-                <td>${task.name}</td>
+                <td>
+                    <label class="switch">
+                        <input type="checkbox" ${task.enabled ? 'checked' : ''}>
+                        <span class="slider round"></span>
+                    </label>
+                </td>
+                <td>${task.task_name}</td>
                 <td>${task.keyword}</td>
                 <td>${task.price_range || '不限'}</td>
                 <td>
                     <div class="description-container">
-                        <p class="description-short">${task.description.substring(0, 50)}...</p>
-                        <div class="description-full" style="display: none;">${task.description}</div>
-                        <button class="toggle-description-btn">查看详情</button>
+                        <p class="description-short">${task.description ? task.description.substring(0, 50) + (task.description.length > 50 ? '...' : '') : '无'}</p>
+                        <div class="description-full" style="display: none;">${task.description || ''}</div>
+                        ${task.description && task.description.length > 50 ? '<button class="control-button-small toggle-description-btn">查看详情</button>' : ''}
                     </div>
                 </td>
                 <td>
-                    <span class="tag ${task.enabled ? 'status-running' : 'status-stopped'}">${task.enabled ? '运行中' : '已停止'}</span>
-                </td>
-                <td>
                     <div class="task-actions">
-                        <button class="control-button-small toggle-task-btn">${task.enabled ? '停止' : '启动'}</button>
-                        <button class="control-button-small delete-task-btn">删除</button>
+                        <button class="control-button-small edit-task-btn">✏️ 编辑</button>
+                        <button class="control-button-small delete-task-btn">🗑️ 删除</button>
                     </div>
                 </td>
             </tr>
@@ -351,11 +354,11 @@ document.addEventListener('DOMContentLoaded', function() {
             <table class="tasks-table">
                 <thead>
                     <tr>
+                        <th>状态</th>
                         <th>任务名称</th>
                         <th>关键词</th>
                         <th>价格范围</th>
                         <th>详细购买需求</th>
-                        <th>状态</th>
                         <th>操作</th>
                     </tr>
                 </thead>
@@ -388,10 +391,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // --- Load data for the current section ---
             if (sectionId === 'tasks') {
-                const container = document.getElementById('tasks-table-container');
-                const tasks = await fetchTasks();
-                container.innerHTML = renderTasksTable(tasks);
-                attachTaskActionListeners(); // Attach listeners for actions like delete/toggle
+                await fetchAndRenderTasks();
             } else if (sectionId === 'results') {
                 await initializeResultsView();
             } else if (sectionId === 'logs') {
@@ -407,6 +407,15 @@ document.addEventListener('DOMContentLoaded', function() {
         } else {
             mainContent.innerHTML = '<section class="content-section active"><h2>页面未找到</h2></section>';
         }
+    }
+
+    async function fetchAndRenderTasks() {
+        const container = document.getElementById('tasks-table-container');
+        if (!container) return;
+        container.innerHTML = '<p>正在加载任务列表...</p>';
+        const tasks = await fetchTasks();
+        container.innerHTML = renderTasksTable(tasks);
+        attachTaskActionListeners();
     }
 
     async function fetchAndRenderResults() {
@@ -543,77 +552,136 @@ document.addEventListener('DOMContentLoaded', function() {
             const modal = document.getElementById('json-viewer-modal');
             modal.style.display = 'flex';
             setTimeout(() => modal.classList.add('visible'), 10);
-        } else if (button.matches('.edit-btn')) {
-            const taskData = JSON.parse(row.dataset.task);
-            
+        } else if (button.matches('.toggle-description-btn')) {
+            const short = row.querySelector('.description-short');
+            const full = row.querySelector('.description-full');
+            const isHidden = full.style.display === 'none';
+            full.style.display = isHidden ? 'block' : 'none';
+            short.style.display = isHidden ? 'none' : 'block';
+            button.textContent = isHidden ? '收起详情' : '查看详情';
+        } else if (button.matches('.edit-task-btn')) {
+            const taskData = await fetchTaskById(taskId);
+            if (!taskData) {
+                alert("无法获取任务详情，请刷新重试。");
+                return;
+            }
+
             row.classList.add('editing');
             row.innerHTML = `
-                <td>
-                    <label class="switch">
-                        <input type="checkbox" ${taskData.enabled ? 'checked' : ''} data-field="enabled">
-                        <span class="slider round"></span>
-                    </label>
-                </td>
-                <td><input type="text" value="${taskData.task_name}" data-field="task_name"></td>
-                <td><input type="text" value="${taskData.keyword}" data-field="keyword"></td>
-                <td>
-                    <input type="text" value="${taskData.min_price || ''}" placeholder="不限" data-field="min_price" style="width: 60px;"> -
-                    <input type="text" value="${taskData.max_price || ''}" placeholder="不限" data-field="max_price" style="width: 60px;">
-                </td>
-                <td>
-                    <label>
-                        <input type="checkbox" ${taskData.personal_only ? 'checked' : ''} data-field="personal_only"> 个人闲置
-                    </label>
-                </td>
-                <td>${(taskData.ai_prompt_criteria_file || 'N/A').replace('prompts/', '')}</td>
-                <td>
-                    <button class="action-btn save-btn">保存</button>
-                    <button class="action-btn cancel-btn">取消</button>
+                <td colspan="6">
+                    <div class="edit-form-container">
+                        <div class="edit-form-grid">
+                            <div class="form-group">
+                                <label>任务名称</label>
+                                <input type="text" value="${taskData.task_name}" data-field="name" class="form-control">
+                            </div>
+                            <div class="form-group">
+                                <label>关键词</label>
+                                <input type="text" value="${taskData.keyword}" data-field="keyword" class="form-control">
+                            </div>
+                            <div class="form-group form-group-range">
+                                <label>价格范围</label>
+                                <div class="price-range-inputs">
+                                    <input type="number" value="${taskData.price_range ? taskData.price_range.split('-')[0].trim() : ''}" data-field="min_price" placeholder="最低价" class="form-control">
+                                    <span>-</span>
+                                    <input type="number" value="${taskData.price_range ? taskData.price_range.split('-')[1].trim() : ''}" data-field="max_price" placeholder="最高价" class="form-control">
+                                </div>
+                            </div>
+                             <div class="form-group form-group-full-width">
+                                <label>详细购买需求 (AI筛选依据)</label>
+                                <textarea data-field="description" rows="3" class="form-control">${taskData.description || ''}</textarea>
+                            </div>
+                        </div>
+                        <div class="edit-form-actions">
+                             <label class="switch-label">
+                                <span class="status-text-label">${taskData.enabled ? '运行中' : '已停止'}</span>
+                                <label class="switch">
+                                    <input type="checkbox" ${taskData.enabled ? 'checked' : ''} data-field="enabled">
+                                    <span class="slider round"></span>
+                                </label>
+                            </label>
+                            <div class="action-buttons">
+                                <button class="control-button-small success-btn save-edit-btn">✅ 保存</button>
+                                <button class="control-button-small cancel-edit-btn">❌ 取消</button>
+                            </div>
+                        </div>
+                    </div>
                 </td>
             `;
-
-        } else if (button.matches('.delete-btn')) {
-            const taskName = row.querySelector('td:nth-child(2)').textContent;
+             // Add event listener for the status text update
+            const checkbox = row.querySelector('input[data-field="enabled"]');
+            const statusTextLabel = row.querySelector('.status-text-label');
+            checkbox.addEventListener('change', () => {
+                statusTextLabel.textContent = checkbox.checked ? '运行中' : '已停止';
+            });
+        } else if (button.matches('.delete-task-btn')) {
+            const taskName = row.querySelector('td:first-child').textContent;
             if (confirm(`你确定要删除任务 "${taskName}" 吗?`)) {
                 const result = await deleteTask(taskId);
                 if (result) {
                     row.remove();
                 }
             }
+        } else if (button.matches('.start-task-btn') || button.matches('.stop-task-btn')) {
+            const isStarting = button.matches('.start-task-btn');
+            await updateTask(taskId, { enabled: isStarting });
+            await fetchAndRenderTasks(); // Refresh the table
         } else if (button.matches('#add-task-btn')) {
             const modal = document.getElementById('add-task-modal');
             modal.style.display = 'flex';
             // Use a short timeout to allow the display property to apply before adding the transition class
             setTimeout(() => modal.classList.add('visible'), 10);
-        } else if (button.matches('.save-btn')) {
-            const taskNameInput = row.querySelector('input[data-field="task_name"]');
-            const keywordInput = row.querySelector('input[data-field="keyword"]');
-            if (!taskNameInput.value.trim() || !keywordInput.value.trim()) {
+        } else if (button.matches('.save-edit-btn')) {
+            const editContainer = row.querySelector('.edit-form-container');
+            if (!editContainer) return;
+
+            const nameInput = editContainer.querySelector('input[data-field="name"]');
+            const keywordInput = editContainer.querySelector('input[data-field="keyword"]');
+
+            if (!nameInput.value.trim() || !keywordInput.value.trim()) {
                 alert('任务名称和关键词不能为空。');
                 return;
             }
 
-            const inputs = row.querySelectorAll('input[data-field]');
-            const updatedData = {};
-            inputs.forEach(input => {
-                const field = input.dataset.field;
-                if (input.type === 'checkbox') {
-                    updatedData[field] = input.checked;
-                } else {
-                    updatedData[field] = input.value.trim() === '' ? null : input.value.trim();
-                }
-            });
+            const minPrice = editContainer.querySelector('input[data-field="min_price"]').value;
+            const maxPrice = editContainer.querySelector('input[data-field="max_price"]').value;
+
+            const updatedData = {
+                task_name: nameInput.value.trim(),
+                keyword: keywordInput.value.trim(),
+                description: editContainer.querySelector('textarea[data-field="description"]').value.trim(),
+                enabled: editContainer.querySelector('input[data-field="enabled"]').checked
+            };
+
+            // Format price_range
+            const min = parseFloat(minPrice);
+            const max = parseFloat(maxPrice);
+            if (!isNaN(min) && !isNaN(max) && min > max) {
+                alert('最低价不能高于最高价');
+                return;
+            }
+
+            if (minPrice && maxPrice) {
+                updatedData.price_range = `${minPrice}-${maxPrice}`;
+            } else if (minPrice) {
+                updatedData.price_range = `${minPrice}-`;
+            } else if (maxPrice) {
+                updatedData.price_range = `-${maxPrice}`;
+            } else {
+                updatedData.price_range = null; // Or ""
+            }
 
             const result = await updateTask(taskId, updatedData);
+
             if (result && result.task) {
-                const container = document.getElementById('tasks-table-container');
-                const tasks = await fetchTasks();
-                container.innerHTML = renderTasksTable(tasks);
+                 await fetchAndRenderTasks();
+            } else {
+                // If update fails, maybe revert or show error
+                alert("更新失败，请重试。");
+                 await fetchAndRenderTasks();
             }
-        } else if (button.matches('.cancel-btn')) {
-            const container = document.getElementById('tasks-table-container');
-            const tasks = await fetchTasks();
-            container.innerHTML = renderTasksTable(tasks);
+        } else if (button.matches('.cancel-edit-btn')) {
+             await fetchAndRenderTasks();
         } else if (button.matches('#refresh-logs-btn')) {
             const logContainer = document.getElementById('log-content-container');
             logContainer.textContent = '正在刷新...';
@@ -801,43 +869,20 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function attachTaskActionListeners() {
-        const tasksTable = document.querySelector('.tasks-table');
-        if (!tasksTable) return;
-
-        tasksTable.addEventListener('click', async (event) => {
-            const target = event.target;
-            const row = target.closest('tr');
-            if (!row) return;
-
-            const taskId = row.dataset.taskId;
-
-            if (target.classList.contains('toggle-description-btn')) {
-                const shortDesc = row.querySelector('.description-short');
-                const fullDesc = row.querySelector('.description-full');
-                const isHidden = fullDesc.style.display === 'none';
-                
-                fullDesc.style.display = isHidden ? 'block' : 'none';
-                shortDesc.style.display = isHidden ? 'none' : 'block';
-                target.textContent = isHidden ? '收起' : '查看详情';
-            } else if (target.classList.contains('toggle-task-btn')) {
-                const task = await fetchTaskById(taskId); // You might need to implement this or fetch all tasks again
-                if (task) {
-                    await updateTask(taskId, { enabled: !task.enabled });
-                    navigateTo('#tasks'); // Refresh view
-                }
-            } else if (target.classList.contains('delete-task-btn')) {
-                if (confirm('你确定要删除这个任务吗？')) {
-                    await deleteTask(taskId);
-                    navigateTo('#tasks'); // Refresh view
-                }
-            }
-        });
+        // This function is now empty because we use event delegation on `mainContent`.
     }
 
     async function fetchTaskById(taskId) {
-        // This is a helper function, assuming you might have a way to get a single task
-        // If not, you could find it from the result of fetchTasks()
-        const tasks = await fetchTasks();
-        return tasks ? tasks[taskId] : null;
+        try {
+            const response = await fetch(`/api/tasks/${taskId}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const result = await response.json();
+            return result.task;
+        } catch (error) {
+            console.error(`无法获取任务 ${taskId}:`, error);
+            return null;
+        }
     }
 });
