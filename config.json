@@ -28,9 +28,10 @@
     "max_pages": 3,
     "personal_only": true,
     "min_price": "50",
-    "max_price": "150",
+    "max_price": "200",
     "ai_prompt_base_file": "prompts/base_prompt.txt",
-    "ai_prompt_criteria_file": "prompts/固态硬盘_criteria.txt"
+    "ai_prompt_criteria_file": "prompts/固态硬盘_criteria.txt",
+    "description": "不限制品牌，价格区间50-200，内存512G，最好是m.2硬盘"
   },
   {
     "task_name": "赛睿耳机",

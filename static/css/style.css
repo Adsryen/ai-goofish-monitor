@@ -916,3 +916,49 @@ input:checked + .slider:before {
 #save-prompt-btn {
     align-self: flex-start;
 }
+
+/* --- Toast Notification Styles --- */
+#toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.toast {
+    background-color: #fff;
+    color: #333;
+    padding: 15px 20px;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    opacity: 0;
+    transform: translateX(100%);
+    transition: all 0.5s cubic-bezier(0.68, -0.55, 0.27, 1.55);
+    min-width: 250px;
+    max-width: 350px;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.toast.info {
+    border-left: 4px solid #1890ff;
+}
+.toast.info::before {
+    content: 'ℹ️';
+}
+
+.toast.success {
+    border-left: 4px solid #52c41a;
+}
+.toast.success::before {
+    content: '✅';
+}

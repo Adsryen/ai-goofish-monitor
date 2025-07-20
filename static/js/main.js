@@ -409,6 +409,26 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    // --- Toast Notification Function ---
+    function showToast(message, type = 'info', duration = 5000) {
+        const container = document.getElementById('toast-container');
+        const toast = document.createElement('div');
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+
+        container.appendChild(toast);
+
+        // Animate in
+        setTimeout(() => toast.classList.add('show'), 10);
+
+        // Animate out and remove
+        setTimeout(() => {
+            toast.classList.remove('show');
+            toast.addEventListener('transitionend', () => toast.remove());
+        }, duration);
+    }
+
+
     async function fetchAndRenderTasks() {
         const container = document.getElementById('tasks-table-container');
         if (!container) return;
@@ -566,6 +586,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 return;
             }
 
+            // Store original description for comparison on save
+            row.dataset.originalDescription = taskData.description || '';
+
             row.classList.add('editing');
             row.innerHTML = `
                 <td colspan="6">
@@ -635,13 +658,31 @@ document.addEventListener('DOMContentLoaded', function() {
             const editContainer = row.querySelector('.edit-form-container');
             if (!editContainer) return;
 
+            const saveBtn = button;
+            const cancelBtn = editContainer.querySelector('.cancel-edit-btn');
+
             const nameInput = editContainer.querySelector('input[data-field="name"]');
             const keywordInput = editContainer.querySelector('input[data-field="keyword"]');
+            const newDescription = editContainer.querySelector('textarea[data-field="description"]').value.trim();
+            const originalDescription = row.dataset.originalDescription || '';
 
             if (!nameInput.value.trim() || !keywordInput.value.trim()) {
                 alert('任务名称和关键词不能为空。');
                 return;
             }
+
+            // --- Show Toast Notification ---
+            if (newDescription !== originalDescription) {
+                showToast('需求描述已变更，将重新生成AI分析标准...', 'info');
+            } else {
+                showToast('需求无变更，仅保存任务设置。', 'success');
+            }
+
+            // --- Show loading state ---
+            saveBtn.disabled = true;
+            cancelBtn.disabled = true;
+            saveBtn.innerHTML = `<span class="spinner"></span> 生成中...`;
+
 
             const minPrice = editContainer.querySelector('input[data-field="min_price"]').value;
             const maxPrice = editContainer.querySelector('input[data-field="max_price"]').value;
@@ -649,7 +690,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const updatedData = {
                 task_name: nameInput.value.trim(),
                 keyword: keywordInput.value.trim(),
-                description: editContainer.querySelector('textarea[data-field="description"]').value.trim(),
+                description: newDescription,
                 enabled: editContainer.querySelector('input[data-field="enabled"]').checked
             };
 

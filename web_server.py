@@ -35,6 +35,7 @@ class TaskUpdate(BaseModel):
     personal_only: Optional[bool] = None
     min_price: Optional[str] = None
     max_price: Optional[str] = None
+    price_range: Optional[str] = None # Added to accept combined price range
     ai_prompt_base_file: Optional[str] = None
     ai_prompt_criteria_file: Optional[str] = None
     description: Optional[str] = None # AI-gen a new criteria file
@@ -148,9 +149,18 @@ async def get_tasks():
         async with aiofiles.open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             content = await f.read()
             tasks = json.loads(content)
-            # 为每个任务添加一个唯一的 id
+            # 为每个任务添加一个唯一的 id 和 price_range
             for i, task in enumerate(tasks):
                 task['id'] = i
+                min_price = task.get("min_price")
+                max_price = task.get("max_price")
+                if min_price and max_price:
+                    task['price_range'] = f"{min_price}-{max_price}"
+                elif min_price:
+                    task['price_range'] = f"{min_price}-"
+                elif max_price:
+                    task['price_range'] = f"-{max_price}"
+
             return tasks
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"配置文件 {CONFIG_FILE} 未找到。")
@@ -176,6 +186,15 @@ async def get_task(task_id: int):
     
     task_data = tasks[task_id]
     task_data['id'] = task_id
+
+    min_price = task_data.get("min_price")
+    max_price = task_data.get("max_price")
+    if min_price and max_price:
+        task_data['price_range'] = f"{min_price}-{max_price}"
+    elif min_price:
+        task_data['price_range'] = f"{min_price}-"
+    elif max_price:
+        task_data['price_range'] = f"-{max_price}"
     
     return {"task": task_data}
 
@@ -283,6 +302,24 @@ async def update_task(task_id: int, task_update: TaskUpdate):
 
     original_task = tasks[task_id].copy()
     update_data = task_update.dict(exclude_unset=True)
+
+    # Handle price_range if it exists
+    if 'price_range' in update_data:
+        price_range = update_data.pop('price_range')
+        if price_range and '-' in price_range:
+            min_p, max_p = price_range.split('-', 1)
+            update_data['min_price'] = min_p.strip() or None
+            update_data['max_price'] = max_p.strip() or None
+        elif price_range and price_range.endswith('-'):
+            update_data['min_price'] = price_range[:-1].strip()
+            update_data['max_price'] = None
+        elif price_range and price_range.startswith('-'):
+            update_data['min_price'] = None
+            update_data['max_price'] = price_range[1:].strip()
+        else:
+            # Handles null, empty string, or single value
+            update_data['min_price'] = None
+            update_data['max_price'] = None
     
     # 检查 description 是否有变化，如果有，则需要重新生成AI分析标准
     if 'description' in update_data and update_data['description'] != original_task.get('description'):
