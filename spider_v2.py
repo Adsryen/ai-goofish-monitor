@@ -10,7 +10,7 @@ import re
 import time
 from datetime import datetime
 from functools import wraps
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 
 import requests
 from dotenv import load_dotenv
@@ -30,10 +30,14 @@ load_dotenv()
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_BASE_URL")
 MODEL_NAME = os.getenv("OPENAI_MODEL_NAME")
+PROXY_URL = os.getenv("PROXY_URL")
 NTFY_TOPIC_URL = os.getenv("NTFY_TOPIC_URL")
 WX_BOT_URL = os.getenv("WX_BOT_URL")
 PCURL_TO_MOBILE = os.getenv("PCURL_TO_MOBILE")
 RUN_HEADLESS = os.getenv("RUN_HEADLESS", "true").lower() != "false"
+LOGIN_IS_EDGE = os.getenv("LOGIN_IS_EDGE", "false").lower() == "true"
+RUNNING_IN_DOCKER = os.getenv("RUNNING_IN_DOCKER", "false").lower() == "true"
+AI_DEBUG_MODE = os.getenv("AI_DEBUG_MODE", "false").lower() == "true"
 
 # 检查配置是否齐全
 if not all([BASE_URL, MODEL_NAME]):
@@ -41,6 +45,13 @@ if not all([BASE_URL, MODEL_NAME]):
 
 # 初始化 OpenAI 客户端
 try:
+    if PROXY_URL:
+        print(f"正在为AI请求使用HTTP/S代理: {PROXY_URL}")
+        # httpx 会自动从环境变量中读取代理设置
+        os.environ['HTTP_PROXY'] = PROXY_URL
+        os.environ['HTTPS_PROXY'] = PROXY_URL
+
+    # openai 客户端内部的 httpx 会自动从环境变量中获取代理配置
     client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
 except Exception as e:
     sys.exit(f"初始化 OpenAI 客户端时出错: {e}")
@@ -72,7 +83,8 @@ def convert_goofish_link(url: str) -> str:
     match_first_link = re.search(r'item\?id=(\d+)', url)
     if match_first_link:
         item_id = match_first_link.group(1)
-        return f"https://pages.goofish.com/sharexy?loadingVisible=false&bft=item&bfs=idlepc.item&spm=a21ybx.item.0.0&bfp={{\"id\":{item_id}}}"
+        bfp_json = f'{{"id":{item_id}}}'
+        return f"https://pages.goofish.com/sharexy?loadingVisible=false&bft=item&bfs=idlepc.item&spm=a21ybx.item.0.0&bfp={quote(bfp_json)}"
 
     return url
 
@@ -309,6 +321,10 @@ async def _parse_search_results_json(json_data: dict, source: str) -> list:
         items = await safe_get(json_data, "data", "resultList", default=[])
         if not items:
             print(f"LOG: ({source}) API响应中未找到商品列表 (resultList)。")
+            if AI_DEBUG_MODE:
+                print(f"--- [SEARCH DEBUG] RAW JSON RESPONSE from {source} ---")
+                print(json.dumps(json_data, ensure_ascii=False, indent=2))
+                print("----------------------------------------------------")
             return []
 
         for item in items:
@@ -495,12 +511,10 @@ def encode_image_to_base64(image_path):
 @retry_on_failure(retries=3, delay=5)
 async def send_ntfy_notification(product_data, reason):
     """当发现推荐商品时，异步发送一个高优先级的 ntfy.sh 通知。"""
-    if not NTFY_TOPIC_URL:
-        print("警告：未在 .env 文件中配置 NTFY_TOPIC_URL，跳过通知。")
+    if not NTFY_TOPIC_URL and not WX_BOT_URL:
+        print("警告：未在 .env 文件中配置 NTFY_TOPIC_URL 或 WX_BOT_URL，跳过通知。")
         return
-    if not WX_BOT_URL:
-        print("警告：未在 .env 文件中配置 WX_BOT_URL，跳过通知。")
-        return
+
     title = product_data.get('商品标题', 'N/A')
     price = product_data.get('当前售价', 'N/A')
     link = product_data.get('商品链接', '#')
@@ -512,57 +526,57 @@ async def send_ntfy_notification(product_data, reason):
 
     notification_title = f"🚨 新推荐! {title[:30]}..."
 
-    try:
-        print(f"   -> 正在发送 ntfy 通知到: {NTFY_TOPIC_URL}")
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: requests.post(
-                NTFY_TOPIC_URL,
-                data=message.encode('utf-8'),
-                headers={
-                    "Title": notification_title.encode('utf-8'),
-                    "Priority": "urgent",
-                    "Tags": "bell,vibration"
-                },
-                timeout=10
+    # --- 发送 ntfy 通知 ---
+    if NTFY_TOPIC_URL:
+        try:
+            print(f"   -> 正在发送 ntfy 通知到: {NTFY_TOPIC_URL}")
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    NTFY_TOPIC_URL,
+                    data=message.encode('utf-8'),
+                    headers={
+                        "Title": notification_title.encode('utf-8'),
+                        "Priority": "urgent",
+                        "Tags": "bell,vibration"
+                    },
+                    timeout=10
+                )
             )
-        )
-        print("   -> 通知发送成功。")
-    except Exception as e:
-        print(f"   -> 发送 ntfy 通知失败: {e}")
-        raise
+            print("   -> ntfy 通知发送成功。")
+        except Exception as e:
+            print(f"   -> 发送 ntfy 通知失败: {e}")
 
-    # 企业微信文本消息的 payload 格式
-    payload = {
-        "msgtype": "text",
-        "text": {
-            "content": f"{notification_title}\n{message}"
+    # --- 发送企业微信机器人通知 ---
+    if WX_BOT_URL:
+        payload = {
+            "msgtype": "text",
+            "text": {
+                "content": f"{notification_title}\n{message}"
+            }
         }
-    }
 
-    try:
-        print(f"   -> 正在发送企业微信通知到: {WX_BOT_URL}")
-        # 设置正确的 Content-Type 为 application/json
-        headers = {
-            "Content-Type": "application/json"
-        }
-        # 使用 json 参数直接发送字典，requests 会自动处理编码和 Content-Type
-        response = requests.post(
-            WX_BOT_URL,
-            json=payload,
-            headers=headers,
-            timeout=10
-        )
-        response.raise_for_status()  # 检查HTTP状态码是否为错误 (如4xx或5xx)
-        result = response.json()
-        print(f"   -> 通知发送成功。响应: {result}")
-    except requests.exceptions.RequestException as e:
-        print(f"   -> 发送企业微信通知失败: {e}")
-        raise  # 重新抛出异常，以便上层可以捕获
-    except Exception as e:
-        print(f"   -> 发送企业微信通知时发生未知错误: {e}")
-        raise
+        try:
+            print(f"   -> 正在发送企业微信通知到: {WX_BOT_URL}")
+            headers = { "Content-Type": "application/json" }
+            loop = asyncio.get_running_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(
+                    WX_BOT_URL,
+                    json=payload,
+                    headers=headers,
+                    timeout=10
+                )
+            )
+            response.raise_for_status()
+            result = response.json()
+            print(f"   -> 企业微信通知发送成功。响应: {result}")
+        except requests.exceptions.RequestException as e:
+            print(f"   -> 发送企业微信通知失败: {e}")
+        except Exception as e:
+            print(f"   -> 发送企业微信通知时发生未知错误: {e}")
 
 @retry_on_failure(retries=5, delay=10)
 async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
@@ -579,6 +593,14 @@ async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
 
     product_details_json = json.dumps(product_data, ensure_ascii=False, indent=2)
     system_prompt = prompt_text
+
+    if AI_DEBUG_MODE:
+        print("\n--- [AI DEBUG] ---")
+        print("--- PROMPT TEXT (first 500 chars) ---")
+        print(prompt_text[:500] + "...")
+        print("--- PRODUCT DATA (JSON) ---")
+        print(product_details_json)
+        print("-------------------\n")
 
     combined_text_prompt = f"""{system_prompt}
 
@@ -606,14 +628,32 @@ async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
 
     ai_response_content = response.choices[0].message.content
 
+    if AI_DEBUG_MODE:
+        print("\n--- [AI DEBUG] ---")
+        print("--- RAW AI RESPONSE ---")
+        print(ai_response_content)
+        print("---------------------\n")
+
     try:
-        return json.loads(ai_response_content)
+        # --- 新增代码：从Markdown代码块中提取JSON ---
+        # 寻找第一个 "{" 和最后一个 "}" 来捕获完整的JSON对象
+        json_start_index = ai_response_content.find('{')
+        json_end_index = ai_response_content.rfind('}')
+        
+        if json_start_index != -1 and json_end_index != -1:
+            clean_json_str = ai_response_content[json_start_index : json_end_index + 1]
+            return json.loads(clean_json_str)
+        else:
+            # 如果找不到 "{" 或 "}"，说明响应格式异常，按原样尝试解析并准备捕获错误
+            print("---!!! AI RESPONSE WARNING: Could not find JSON object markers '{' and '}' in the response. !!!---")
+            return json.loads(ai_response_content) # 这行很可能会再次触发错误，但保留逻辑完整性
+        # --- 修改结束 ---
+        
     except json.JSONDecodeError as e:
         print("---!!! AI RESPONSE PARSING FAILED (JSONDecodeError) !!!---")
         print(f"原始返回值 (Raw response from AI):\n---\n{ai_response_content}\n---")
         raise e
-
-
+        
 async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
     """
     【核心执行器】
@@ -650,7 +690,14 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         print(f"LOG: 输出文件 {output_filename} 不存在，将创建新文件。")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=RUN_HEADLESS)
+        if LOGIN_IS_EDGE:
+            browser = await p.chromium.launch(headless=RUN_HEADLESS, channel="msedge")
+        else:
+            # Docker环境内，使用Playwright自带的chromium；本地环境，使用系统安装的Chrome
+            if RUNNING_IN_DOCKER:
+                browser = await p.chromium.launch(headless=RUN_HEADLESS)
+            else:
+                browser = await p.chromium.launch(headless=RUN_HEADLESS, channel="chrome")
         context = await browser.new_context(storage_state=STATE_FILE, user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3")
         page = await context.new_page()
 
@@ -886,6 +933,15 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                             # --- 修改: 增加单个商品处理后的主要延迟 ---
                             print("   [反爬] 执行一次主要的随机延迟以模拟用户浏览间隔...")
                             await random_sleep(15, 30) # 原来是 (8, 15)，这是最重要的修改之一
+                        else:
+                            print(f"   错误: 获取商品详情API响应失败，状态码: {detail_response.status}")
+                            if AI_DEBUG_MODE:
+                                print(f"--- [DETAIL DEBUG] FAILED RESPONSE from {item_data['商品链接']} ---")
+                                try:
+                                    print(await detail_response.text())
+                                except Exception as e:
+                                    print(f"无法读取响应内容: {e}")
+                                print("----------------------------------------------------")
 
                     except PlaywrightTimeoutError:
                         print(f"   错误: 访问商品详情页或等待API响应超时。")
