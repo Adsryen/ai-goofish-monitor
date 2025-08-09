@@ -6,3 +6,12 @@ fastapi
 uvicorn[standard]
 jinja2
 aiofiles
+python-socks
+apscheduler
+httpx[socks]
+Pillow
+pyzbar
+qrcode
+pytest
+pytest-asyncio
+coverage
